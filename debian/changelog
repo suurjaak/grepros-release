@@ -1,0 +1,152 @@
+ros-foxy-grepros (0.4.0-1focal) focal; urgency=high
+
+  * add --plugin grepros.plugins.parquet (Parquet output)
+  * add --plugin grepros.plugins.sql (SQL schema output)
+  * add --plugin grepros.plugins.embag (faster ROS1 bag reader)
+  * add --reindex-if-unindexed option
+  * add --every-nth-match option
+  * add --every-nth-message option
+  * add --every-nth-interval option
+  * allow multiple write sinks, combine --write-format and --write-option to --write
+  * refactor plugins interface
+  * populate topics.offered_qos_profiles in ROS2 bag output where possible
+  * fix progress bar afterword not updating when grepping multiple bags
+  * fix error on empty bag with no messages
+  * fix error in Postgres output for NaNs in nested JSON values
+  * fix skipping some messages in ROS1 bag for types with identical hashes
+  * fix not being able to specify list arguments several times
+  * ensure no conflicts from changed message types or identical type hashes
+  * add tests
+
+ -- Erki Suurjaak <erki@lap.ee>  Sat, 25 Dec 2021 22:00:00 -0000
+
+ros-foxy-grepros (0.3.5-1focal) focal; urgency=high
+
+  * fix Postgres output not having content
+
+ -- Erki Suurjaak <erki@lap.ee>  Mon, 13 Dec 2021 22:00:00 -0000
+
+ros-foxy-grepros (0.3.4-1focal) focal; urgency=high
+
+  * add --write-option message-yaml=true|false, for SQLite output
+  * speed up SQLite output (~4-8x)
+  * speed up YAML formatting (~2x)
+  * fix no engine name in console texts for Postgres output
+
+ -- Erki Suurjaak <erki@lap.ee>  Mon, 13 Dec 2021 22:00:00 -0000
+
+ros-foxy-grepros (0.3.3-1focal) focal; urgency=high
+
+  * fix errors in Postgres/SQLite output
+
+ -- Erki Suurjaak <erki@lap.ee>  Sun, 12 Dec 2021 22:00:00 -0000
+
+ros-foxy-grepros (0.3.2-1focal) focal; urgency=high
+
+  * rename --write-option commit_interval to commit-interval
+  * raise Postgres default commit-interval from 100 to 1000
+  * add --write-option commit-interval support to SQLite output
+  * add --write-option subtypes=array|all, for Postgres/SQLite output
+  * speed up SQLite output (~2x)
+  * refactor Postgres/SQLite sinks onto common base class
+
+ -- Erki Suurjaak <erki@lap.ee>  Sat, 11 Dec 2021 22:00:00 -0000
+
+ros-foxy-grepros (0.3.1-1focal) focal; urgency=high
+
+  * add --write-option template=/my/html.template, for HTML output
+  * add --write-option commit_interval=NUM, for Postgres output
+  * drop --write-format-template
+  * fix highlighting subtype arrays
+
+ -- Erki Suurjaak <erki@lap.ee>  Sun, 05 Dec 2021 22:00:00 -0000
+
+ros-foxy-grepros (0.3.0-1focal) focal; urgency=high
+
+  * add --write-format postgres
+  * add --no-verbose option
+  * add --condition option
+  * add --plugin option
+  * add wildcard support to fields in "field=PATTERN"
+  * use up to nanosecond precision in HTML output timeline
+  * highlight empty arrays on any-match regardless of type
+  * select meta-fields as last in SQLite topic views
+  * fix potential error on using --max-per-topic with live topics
+  * fix detecting ROS2 bags
+  * fix using --progress with --live
+
+ -- Erki Suurjaak <erki@lap.ee>  Sat, 04 Dec 2021 22:00:00 -0000
+
+ros-foxy-grepros (0.2.5-1focal) focal; urgency=high
+
+  * add --progress option
+  * match anything by default if no patterns given
+  * add timeline to HTML output
+  * auto-detect output format from given filename
+  * fix breaking too early on --max-per-topic
+  * fix adding topic views to existing SQLite output database
+  * fix error on adding message type tables for empty list values in SQLite output
+  * fix sorting table of contents in HTML output
+  * do not auto-expand table of contents in HTML output
+
+ -- Erki Suurjaak <erki@lap.ee>  Sat, 27 Nov 2021 22:00:00 -0000
+
+ros-foxy-grepros (0.2.4-1focal) focal; urgency=high
+
+  * skip retrieving full message counts from ROS2 bag before any match
+  * ensure message YAMLs in html output always in color and wrapped at 120 characters
+  * fix inserting duplicate types-rows when adding to an existing SQLite output file
+  * improve wrapping lists and nunbers
+
+ -- Erki Suurjaak <erki@lap.ee>  Wed, 17 Nov 2021 22:00:00 -0000
+
+ros-foxy-grepros (0.2.3-1focal) focal; urgency=high
+
+  * add --write-format csv
+  * add --write-format sqlite
+  * local Python packages no longer required for custom message types in ROS1
+  * add topic toggle checkboxes to HTML output
+  * add topic count to live source metainfo
+  * break early when max matches per topic reached
+  * improve HTML output
+
+ -- Erki Suurjaak <erki@lap.ee>  Sun, 14 Nov 2021 22:00:00 -0000
+
+ros-foxy-grepros (0.2.2-1focal) focal; urgency=high
+
+  * shut down ROS2 live node properly
+  * better support for ROS2 primitive types
+  * make HTML output table of contents sortable
+  * stop requiring unneeded environment variables
+
+ -- Erki Suurjaak <erki@lap.ee>  Tue, 09 Nov 2021 22:00:00 -0000
+
+ros-foxy-grepros (0.2.1-1focal) focal; urgency=high
+
+  * add --write-format option, with HTML support
+  * add --wrap-width option
+  * add --order-bag-by option
+  * handle topics with multiple message types
+  * improve console output wrapping
+  * fix detecting ROS2 primitive array types
+  * fix using ROS2 bag start-end timestamps
+
+ -- Erki Suurjaak <erki@lap.ee>  Mon, 08 Nov 2021 22:00:00 -0000
+
+ros-foxy-grepros (0.2.0-1focal) focal; urgency=high
+
+  * add ROS2 support
+  * flush stdout on every print, to avoid buffering in redirected output
+  * add --ros-time-in option
+  * add --unique-only option
+  * rename options --noselect-field and --noprint-field to --no-select-field and --no-print-field
+
+ -- Erki Suurjaak <erki@lap.ee>  Wed, 03 Nov 2021 22:00:00 -0000
+
+ros-foxy-grepros (0.1.0-1focal) focal; urgency=high
+
+  * grep for ROS1 bag files and live topics, able to print and publish and write bagfiles
+
+ -- Erki Suurjaak <erki@lap.ee>  Sat, 30 Oct 2021 21:00:00 -0000
+
+
