@@ -2,6 +2,51 @@
 Changelog for package grepros
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+0.4.4 (2022-03-16)
+-------------------
+* add support for reading zstd-compressed bagfiles
+* use message type definition from ROS1 live topics instead of locally installed package
+* optimize partial printing of very long array fields
+* optimize CSV output of very long array fields
+* strip leading "./" from printed filename prefix if grepping working directory
+* fix not skipping ROS2 bag if all topics filtered out
+* fix making compatible QoS for ROS2 topic subscriptions
+* fix making unique filename on error in HTML output
+
+0.4.3 (2022-03-01)
+-------------------
+* continue subscribing to other live topics even if one causes error
+* continue reading from ROS2 bag even if one message type causes error
+* subscribe to live topics in ROS2 with QoS matching publisher
+* fix not saving publisher QoS profiles in written ROS2 bags
+* fix package build not including submodules (#1)
+
+0.4.2 (2022-02-09)
+-------------------
+* add overwrite=true|false to --write options
+* add column-name=rostype:value to --write Parquet options
+* add scripts/generate_msgs.py
+* create message type definition from .idl if .msg file not available in ROS2
+* improve DDS type parsing in ROS2
+* handle ROS2 char and byte int8/uint8 reversal vs ROS1
+* fix assembling message type full definition in ROS2
+* fix processing byte values in ROS2
+* fix processing bounded string types in ROS2
+* fix inserting chars in Postgres
+* fix inserting very large integers in SQLite
+
+0.4.1 (2022-01-08)
+-------------------
+* refactor database and SQL sinks onto a common base
+* allow specifying dialect options in Postgres/SQLite output
+* allow overriding table and view names in SQL dialects
+* allow specifying field value adapters in SQL dialects
+* allow specifying structured type mappings in Parquet output like type-uint8[]="list(uint8())"
+* drop meta-table from Postgres output
+* drop default value from --publish-prefix option
+* fix error in parsing subtypes from message definitions
+* fix converting ROS2 temporal messages to seconds/nanoseconds
+
 0.4.0 (2021-12-26)
 -------------------
 * add --plugin grepros.plugins.parquet (Parquet output)
