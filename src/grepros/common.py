@@ -9,12 +9,14 @@ Released under the BSD License.
 
 @author      Erki Suurjaak
 @created     23.10.2021
-@modified    25.12.2021
+@modified    02.03.2022
 ------------------------------------------------------------------------------
 """
 from __future__ import print_function
 import datetime
+import functools
 import glob
+import importlib
 import itertools
 import math
 import os
@@ -26,6 +28,9 @@ import threading
 import time
 try: import curses
 except ImportError: curses = None
+
+try: import zstandard
+except ImportError: zstandard = None
 
 
 class MatchMarkers(object):
@@ -61,6 +66,8 @@ class ConsolePrinter(object):
 
     _LINEOPEN = False  ## Whether last print was without linefeed
 
+    _UNIQUES = set()   ## Unique texts printed with `__once=True`
+
     @classmethod
     def configure(cls, color):
         """
@@ -95,10 +102,20 @@ class ConsolePrinter(object):
 
     @classmethod
     def print(cls, text="", *args, **kwargs):
-        """Prints text, formatted with args and kwargs."""
+        """
+        Prints text, formatted with args and kwargs.
+
+        @param   __file   file object to print to if not sys.stdout
+        @param   __end    line end to use if not linefeed "\n"
+        @param   __once   whether text should be printed only once
+                          and discarded on any further calls (applies to unformatted text)
+        """
+        text, fmted = str(text), False
+        if kwargs.pop("__once", False):
+            if text in cls._UNIQUES: return
+            cls._UNIQUES.add(text)
         fileobj, end = kwargs.pop("__file", sys.stdout), kwargs.pop("__end", "\n")
         pref, suff = kwargs.pop("__prefix", ""), kwargs.pop("__suffix", "")
-        text, fmted = str(text), False
         try: text, fmted = (text % args if args else text), bool(args)
         except Exception: pass
         try: text, fmted = (text % kwargs if kwargs else text), fmted or bool(kwargs)
@@ -147,6 +164,74 @@ class ConsolePrinter(object):
         """Ends current open line, if any."""
         if cls._LINEOPEN: print()
         cls._LINEOPEN = False
+
+
+class Decompressor(object):
+    """Decompresses zstandard archives."""
+
+    ## Supported archive extensions
+    EXTENSIONS = (".zst", ".zstd")
+
+    ## zstd file header magic 4 bytes
+    ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+
+
+    @classmethod
+    def decompress(cls, path, progress=False):
+        """
+        Decompresses file to same directory, showing optional progress bar.
+
+        @return  uncompressed file path
+        """
+        cls.validate()
+        path2, bar, size, processed = os.path.splitext(path)[0], None, os.path.getsize(path), 0
+        fmt = lambda s: format_bytes(s, strip=False)
+        if progress:
+            tpl = " Decompressing %s (%s): {afterword}" % (os.path.basename(path), fmt(size))
+            bar = ProgressBar(pulse=True, aftertemplate=tpl)
+
+        ConsolePrinter.warn("Compressed file %s (%s), decompressing to %s.", path, fmt(size), path2)
+        bar and bar.update(0).start()  # Start progress pulse
+        try:
+            with open(path, "rb") as f, open(path2, "wb") as g:
+                reader = zstandard.ZstdDecompressor().stream_reader(f)
+                while True:
+                    chunk = reader.read(1048576)
+                    if not chunk: break  # while
+
+                    g.write(chunk)
+                    processed += len(chunk)
+                    bar and (setattr(bar, "afterword", fmt(processed)), bar.update(processed))
+                reader.close()
+        except Exception:
+            os.remove(path2)
+            raise
+        finally: bar and (setattr(bar, "pulse", False), bar.update(processed).stop())
+        return path2
+
+
+    @classmethod
+    def is_compressed(cls, path):
+        """Returns whether file is a recognized archive."""
+        result = os.path.isfile(path)
+        if result:
+            result = any(path.lower().endswith(x) for x in cls.EXTENSIONS)
+        if result:
+            with open(path, "rb") as f:
+                result = (f.read(4) == cls.ZSTD_MAGIC)
+        return result
+
+
+    @classmethod
+    def make_decompressed_name(cls, path):
+        """Returns the path without archive extension, if any."""
+        return os.path.splitext(path)[0] if cls.is_compressed(path) else path
+
+
+    @classmethod
+    def validate(cls):
+        """Raises error if decompression library not available."""
+        if not zstandard: raise Exception("zstandard not installed, cannot decompress")
 
 
 
@@ -494,7 +579,7 @@ def filter_fields(fieldmap, top=(), include=(), exclude=()):
 
 def find_files(names=(), paths=(), extensions=(), skip_extensions=(), recurse=False):
     """
-    Yields filenames from current directory or given paths.
+    Yields filenames from current directory or given paths, .
 
     Seeks only files with given extensions if names not given.
     Prints errors for names and paths not found.
@@ -511,7 +596,7 @@ def find_files(names=(), paths=(), extensions=(), skip_extensions=(), recurse=Fa
         if os.path.isfile(directory):
             ConsolePrinter.error("%s: Is a file", directory)
             return
-        for path in glob.glob(directory):  # Expand * wildcards, if any
+        for path in sorted(glob.glob(directory)):  # Expand * wildcards, if any
             pathsfound.add(directory)
             for n in names:
                 p = n if not paths or os.path.isabs(n) else os.path.join(path, n)
@@ -523,7 +608,7 @@ def find_files(names=(), paths=(), extensions=(), skip_extensions=(), recurse=Fa
                     namesfound.add(n)
                     yield f
             for root, _, files in os.walk(path) if not names else ():
-                for f in (os.path.join(root, f) for f in files
+                for f in (os.path.join(root, f) for f in sorted(files)
                           if (not extensions or any(map(f.endswith, extensions)))
                           and not any(map(f.endswith, skip_extensions))):
                     yield f
@@ -534,6 +619,8 @@ def find_files(names=(), paths=(), extensions=(), skip_extensions=(), recurse=Fa
     for f in (f for p in paths or ["."] for f in iter_files(p)):
         if os.path.abspath(f) not in processed:
             processed.add(os.path.abspath(f))
+            if not paths and f == os.path.join(".", os.path.basename(f)):
+                f = os.path.basename(f)  # Strip leading "./"
             yield f
 
     for path in (p for p in paths if p not in pathsfound):
@@ -571,6 +658,26 @@ def format_stamp(stamp):
     return datetime.datetime.fromtimestamp(stamp).isoformat(sep=" ")
 
 
+def import_item(name):
+    """
+    Returns imported module, or identifier from imported namespace; raises on error.
+
+    @param   name  Python module name like "my.module"
+                   or module namespace identifier like "my.module.Class"
+    """
+    result, parts = None, name.split(".")
+    for i, item in enumerate(parts):
+        path, success = ".".join(parts[:i + 1]), False
+        try: result, success = importlib.import_module(path), True
+        except ImportError: pass
+        if not success and i:
+            try: result, success = getattr(result, item), True
+            except AttributeError: pass
+        if not success:
+            raise ImportError("No module or identifier named %r" % path)
+    return result
+
+
 def makedirs(path):
     """Creates directory structure for path if not already existing."""
     parts, accum = list(filter(bool, path.split(os.sep))), []
@@ -589,9 +696,7 @@ def memoize(func):
         if key not in cache:
             cache[key] = func(*args, **kwargs)
         return cache[key]
-    for attr in ("__module__", "__name__", "__doc__"):
-        setattr(inner, attr, getattr(func, attr))
-    return inner
+    return functools.update_wrapper(inner, func)
 
 
 def merge_dicts(d1, d2):
@@ -657,38 +762,6 @@ def plural(word, items=None, numbers=True, single="1", sep=",", pref="", suf="")
         fmtcount = pref + fmtcount + suf
         result = "%s %s" % (single if 1 == count else fmtcount, result)
     return result.strip()
-
-
-def quote(name, force=False):
-    """
-    Returns name in quotes and proper-escaped for SQLite queries.
-
-    @param   force  quote even if name does not need quoting (starts with a letter,
-                    contains only alphanumerics, and is not a reserved keyword)
-    """
-    ## Words that need quoting if in name context, e.g. table name.
-    SQLITE_RESERVED_KEYWORDS = [
-        "ACTION", "ADD", "AFTER", "ALL", "ALTER", "ALWAYS", "ANALYZE",
-        "AND", "AS", "ASC", "ATTACH", "AUTOINCREMENT", "BEFORE", "BEGIN", "BETWEEN",
-        "BY", "CASE", "CAST", "CHECK", "COLLATE", "COMMIT", "CONSTRAINT", "CREATE",
-        "CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP", "DEFAULT", "DEFERRABLE",
-        "DEFERRED", "DELETE", "DESC", "DETACH", "DISTINCT", "DO", "DROP", "EACH",
-        "ELSE", "END", "ESCAPE", "EXCEPT", "EXISTS", "EXPLAIN", "FOR", "FOREIGN",
-        "FROM", "GENERATED", "GROUP", "HAVING", "IF", "IMMEDIATE", "IN", "INDEX",
-        "INITIALLY", "INSERT", "INSTEAD", "INTERSECT", "INTO", "IS", "ISNULL",
-        "JOIN", "KEY", "LIKE", "LIMIT", "MATCH", "NO", "NOT", "NOTHING", "NOTNULL",
-        "NULL", "OF", "ON", "OR", "ORDER", "OVER", "PRAGMA", "PRECEDING", "PRIMARY",
-        "RAISE", "RECURSIVE", "REFERENCES", "REGEXP", "REINDEX", "RELEASE", "RENAME",
-        "REPLACE", "RESTRICT", "ROLLBACK", "SAVEPOINT", "SELECT", "SET", "TABLE",
-        "TEMPORARY", "THEN", "TIES", "TO", "TRANSACTION", "TRIGGER", "UNBOUNDED",
-        "UNION", "UNIQUE", "UPDATE", "USING", "VACUUM", "VALUES", "VIEW", "WHEN",
-        "WHERE", "WITHOUT"
-    ]
-    result = name
-    if force or result.upper() in SQLITE_RESERVED_KEYWORDS \
-    or re.search(r"(^[\W\d])|(?=\W)", result, re.U):
-        result = '"%s"' % result.replace('"', '""')
-    return result
 
 
 def unique_path(pathname, empty_ok=False):
