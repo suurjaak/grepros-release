@@ -25,6 +25,7 @@ Supports loading custom plugins, mainly for additional output formats.
 - [Example usage](#example-usage)
 - [Installation](#installation)
   - [Using pip](#using-pip)
+  - [Using apt](#using-apt)
   - [Using catkin](#using-catkin)
   - [Using colcon](#using-colcon)
 - [Inputs](#inputs)
@@ -47,7 +48,10 @@ Supports loading custom plugins, mainly for additional output formats.
   - [embag](#embag)
   - [parquet](#parquet)
   - [sql](#sql)
+- [SQL dialects](#sql-dialects)
+- [Notes on ROS1 vs ROS2](#notes-on-ros1-vs-ros2)
 - [All command-line arguments](#all-command-line-arguments)
+- [Dependencies](#dependencies)
 - [Attribution](#attribution)
 - [License](#license)
 
@@ -108,6 +112,9 @@ target matches if any value matches.
 Note that some expressions may need to be quoted to avoid shell auto-unescaping
 or auto-expanding them, e.g. `linear.x=2.?5` should be given as `"linear.x=2\.?5"`.
 
+Care must also be taken with unquoted wildcards, as they will auto-expanded by shell
+if they happen to match paths on disk.
+
 
 Installation
 ------------
@@ -119,14 +126,25 @@ Installation
 This will add the `grepros` command to path.
 
 Requires ROS Python packages
-(ROS1: rospy, roslib, rosbag, genpy; ROS2: rclpy, rosidl_runtime_py).
+(ROS1: rospy, roslib, rosbag, genpy;
+ ROS2: rclpy, rosidl_parser, rosidl_runtime_py, builtin_interfaces).
 
-If you don't want to install the ROS1 stack, and are only interested
-in using bag files, not grepping from or publishing to live topics,
-minimal ROS1 Python packages can also be installed separately with:
+For ROS1, if only using bag files and no live topics, minimal ROS1 Python
+packages can also be installed separately with:
 
     pip install rospy rosbag roslib roslz4 \
     --extra-index-url https://rospypi.github.io/simple/
+
+
+### Using apt
+
+If ROS apt repository has been added to system:
+
+  sudo apt install ros-noetic-grepros  # ROS1
+
+  sudo apt install ros-foxy-grepros    # ROS2
+
+This will add the `grepros` command to the global ROS1 / ROS2 environment.
 
 
 ### Using catkin
@@ -178,6 +196,14 @@ Reindex unindexed ROS1 bags before processing
 (warning: creates backup copies of files, into same directory as file):
 
     --reindex-if-unindexed
+    --reindex-if-unindexed --progress
+
+Decompress archived ROS bags before processing
+(`.zst` `.zstd` extensions, requires `zstandard` Python package)
+(warning: unpacks archived file to disk, into same directory as file):
+
+    --decompress
+    --decompress --progress
 
 Order bag messages first by topic or type, and only then by time:
 
@@ -228,11 +254,11 @@ accept raw control characters (`more -f` or `less -R`).
 
 ### bag
 
-    --write path/to/my.bag [format=bag]
+    --write path/to/my.bag [format=bag] [overwrite=true|false]
 
 Write messages to a ROS bag file, the custom `.bag` format in ROS1
 or the `.db3` SQLite database format in ROS2. If the bagfile already exists, 
-it is appended to. 
+it is appended to, unless specified to overwrite.
 
 Specifying `format=bag` is not required
 if the filename ends with `.bag` in ROS1 or `.db3` in ROS2.
@@ -240,7 +266,7 @@ if the filename ends with `.bag` in ROS1 or `.db3` in ROS2.
 
 ### csv
 
-    --write path/to/my.csv [format=csv]
+    --write path/to/my.csv [format=csv] [overwrite=true|false]
 
 Write messages to CSV files, each topic to a separate file, named
 `path/to/my.full__topic__name.csv` for `/full/topic/name`.
@@ -249,14 +275,14 @@ Output mimicks CSVs compatible with PlotJuggler, all messages values flattened
 to a single list, with header fields like `/topic/field.subfield.listsubfield.0.data.1`.
 
 If a file already exists, a unique counter is appended to the name of the new file,
-e.g. `my.full__topic__name.2.csv`.
+e.g. `my.full__topic__name.2.csv`, unless specified to overwrite.
 
 Specifying `format=csv` is not required if the filename ends with `.csv`.
 
 
 ### html
 
-    --write path/to/my.html [format=html]
+    --write path/to/my.html [format=html] [overwrite=true|false]
 
 Write messages to an HTML file, with a linked table of contents,
 message timeline, message type definitions, and a topically traversable message list.
@@ -266,7 +292,7 @@ message timeline, message type definitions, and a topically traversable message 
 Note: resulting file may be large, and take a long time to open in browser. 
 
 If the file already exists, a unique counter is appended to the name of the new file,
-e.g. `my.2.html`.
+e.g. `my.2.html`, unless specified to overwrite.
 
 Specifying `format=html` is not required if the filename ends with `.htm` or `.html`.
 
@@ -298,7 +324,8 @@ Postgres URI scheme `postgresql://`.
 Requires [psycopg2](https://pypi.org/project/psycopg2).
 
 Parameter `--write` can also use the Postgres keyword=value format,
-e.g. "host=localhost port=5432 dbname=mydb username=postgres connect_timeout=10"
+e.g. `"host=localhost port=5432 dbname=mydb username=postgres connect_timeout=10"`.
+
 Standard Postgres environment variables are also supported (PGPASSWORD et al).
 
 [![Screenshot](https://raw.githubusercontent.com/suurjaak/grepros/media/th_screen_postgres.png)](https://raw.githubusercontent.com/suurjaak/grepros/media/screen_postgres.png)
@@ -306,6 +333,13 @@ Standard Postgres environment variables are also supported (PGPASSWORD et al).
 A custom transaction size can be specified (default is 1000; 0 is autocommit):
 
     --write postgresql://username@host/dbname commit-interval=NUM
+
+Updates to Postgres SQL dialect can be loaded from a YAML or JSON file:
+
+    --write postgresql://username@host/dbname dialect-file=path/to/dialects.yaml
+
+More on [SQL dialects](#sql-dialects).
+
 
 #### Nested messages
 
@@ -380,11 +414,11 @@ CREATE TABLE "std_msgs/Header" (
 
 ### sqlite
 
-    --write path/to/my.sqlite [format=sqlite]
+    --write path/to/my.sqlite [format=sqlite] [overwrite=true|false]
 
 Write an SQLite database with tables `pkg/MsgType` for each ROS message type
 and nested type, and views `/full/topic/name` for each topic. 
-If the database already exists, it is appended to.
+If the database already exists, it is appended to, unless specified to overwrite.
 
 Output is compatible with ROS2 `.db3` bagfiles, supplemented with
 full message YAMLs, and message type definition texts. Note that a database
@@ -403,6 +437,12 @@ A custom transaction size can be specified (default is 1000; 0 is autocommit):
 By default, table `messages` is populated with full message YAMLs, unless:
 
     --write path/to/my.sqlite message-yaml=false
+
+Updates to SQLite SQL dialect can be loaded from a YAML or JSON file:
+
+    --write path/to/my.sqlite dialect-file=path/to/dialects.yaml
+
+More on [SQL dialects](#sql-dialects).
 
 
 #### Nested messages
@@ -483,13 +523,15 @@ CREATE TABLE "std_msgs/Header" (
 
     --publish
 
-Publish messages to live ROS topics. The published topic name will default to
-`/grepros/original/name`. Topic prefix and suffix can be changed, 
+Publish messages to live ROS topics. Topic prefix and suffix can be changed, 
 or topic name set to one specific name:
 
     --publish-prefix  /myroot
     --publish-suffix  /myend
     --publish-fixname /my/singular/name
+
+One of the above arguments needs to be specified if publishing to live ROS topics
+while grepping from live ROS topics, to avoid endless loops.
 
 Set custom queue size for publishers (default 10):
 
@@ -733,7 +775,9 @@ Significantly faster, but library tends to be unstable.
 
 ### parquet
 
-    --plugin grepros.plugins.parquet --write path/to/my.parquet [format=parquet]
+    --plugin grepros.plugins.parquet --write path/to/my.parquet[format=parquet] \
+             [column-name=rostype:value] [overwrite=true|false] [type-rostype=arrowtype] \
+             [writer-argname=argvalue]
 
 Write messages to Apache Parquet files (columnar storage format, version 2.6),
 each message type to a separate file, named `path/to/package__MessageType__typehash/my.parquet`
@@ -741,15 +785,20 @@ for `package/MessageType` (typehash is message type definition MD5 hashsum).
 Adds fields `_topic string()` and `_timestamp timestamp("ns")` to each type.
 
 If a file already exists, a unique counter is appended to the name of the new file,
-e.g. `package__MessageType__typehash/my.2.parquet`.
+e.g. `package__MessageType__typehash/my.2.parquet`, unless specified to overwrite.
 
 Specifying `format=parquet` is not required if the filename ends with `.parquet`.
 
 Requires [pandas](https://pypi.org/project/pandas) and [pyarrow](https://pypi.org/project/pyarrow).
 
-Supports custom mapping between ROS and pyarrow types:
+Supports adding supplementary columns with fixed values to Parquet files:
 
-    --write path/to/my.parquet type-rostype=arrowtype
+    --write path/to/my.parquet column-bag_hash=string:26dfba2c
+
+Supports custom mapping between ROS and pyarrow types with `type-rostype=arrowtype`:
+
+    --write path/to/my.parquet type-time="timestamp('ns')"
+    --write path/to/my.parquet type-uint8[]="list(uint8())"
 
 Time/duration types are flattened into separate integer columns `secs` and `nsecs`,
 unless they are mapped to pyarrow types explicitly, like:
@@ -770,12 +819,23 @@ The value is interpreted as JSON if possible, e.g. `writer-use_dictionary=false`
 
 ### sql
 
-    --plugin grepros.plugins.sql --write path/to/my.sql [format=sql]
+    --plugin grepros.plugins.sql --write path/to/my.sql [format=sql] [overwrite=true|false]
 
 Write SQL schema to output file, CREATE TABLE for each message type
 and CREATE VIEW for each topic.
 
+If the file already exists, a unique counter is appended to the name of the new file,
+e.g. `my.2.sql`, unless specified to overwrite.
+
 Specifying `format=sql` is not required if the filename ends with `.sql`.
+
+To create tables for nested array message type fields:
+
+    --write path/to/my.sql nesting=array
+
+To create tables for all nested message types:
+
+    --write path/to/my.sql nesting=all
 
 A specific SQL dialect can be specified:
 
@@ -785,50 +845,95 @@ Additional dialects, or updates for existing dialects, can be loaded from a YAML
 
     --write path/to/my.sql dialect=mydialect dialect-file=path/to/dialects.yaml
 
+
+SQL dialects
+------------
+
+Postgres, SQLite and SQL outputs support loading additional options for SQL dialect.
+
 Dialect file format:
 
 ```yaml
 dialectname:
-  table_template:      CREATE TABLE template, args: table, cols, type, hash, package, class
-  view_template:       CREATE VIEW template, args: view, cols, table, topic, type, hash, package, class
-  types:               Mapping between ROS and SQL common types for table columns,
-                       e.g. {"uint8": "SMALLINT", "uint8[]": "BYTEA", ..}
-  defaulttype:         Fallback SQL type if no mapped type for ROS type;
-                       if no mapped and no default type, column type will be ROS type as-is
-  arraytype_template:  Array type template, args: type
-  maxlen_entity:       Maximum table/view name length, 0 disables
-  maxlen_column:       Maximum column name length, 0 disables
-  invalid_char_regex:  Regex for matching invalid characters in name, if any
-  invalid_char_repl:   Replacement for invalid characters in name
+  table_template:       CREATE TABLE template; args: table, cols, type, hash, package, class
+  view_template:        CREATE VIEW template; args: view, cols, table, topic, type, hash, package, class
+  table_name_template:  message type table name template; args: type, hash, package, class
+  view_name_template:   topic view name template; args: topic, type, hash, package, class
+  types:                Mapping between ROS and SQL common types for table columns,
+                        e.g. {"uint8": "SMALLINT", "uint8[]": "BYTEA", ..}
+  adapters:             Mapping between ROS types and callable converters for table columns,
+                        e.g. {"time": "decimal.Decimal"}
+  defaulttype:          Fallback SQL type if no mapped type for ROS type;
+                        if no mapped and no default type, column type will be ROS type as-is
+  arraytype_template:   Array type template; args: type
+  maxlen_entity:        Maximum table/view name length, 0 disables
+  maxlen_column:        Maximum column name length, 0 disables
+  invalid_char_regex:   Regex for matching invalid characters in name, if any
+  invalid_char_repl:    Replacement for invalid characters in name
 ```
+
+Template parameters like `table_name_template` use Python `str.format()` keyword syntax,
+e.g. `{"table_name_template": "{type}", "view_name_template": "{topic}"}`.
 
 Time/duration types are flattened into separate integer columns `secs` and `nsecs`,
 unless the dialect maps them to SQL types explicitly, e.g. `{"time": "BIGINT"}`.
 
-Any dialect options not specified will be taken from the default dialect configuration:
+Any dialect options not specified in the given dialect or built-in dialects,
+will be taken from the default dialect configuration:
 
 ```yaml
-  table_template:      'CREATE TABLE IF NOT EXISTS {table} ({cols});'
-  view_template:       'CREATE VIEW IF NOT EXISTS {view} AS
-                        SELECT {cols}
-                        FROM {table}
-                        WHERE _topic = {topic};'
-  types:               {}
-  defaulttype:         null
-  arraytype_template:  '{type}[]'
-  maxlen_entity:       0
-  maxlen_column:       0
-  invalid_char_regex:  null
-  invalid_char_repl:   '__'
+  table_template:       'CREATE TABLE IF NOT EXISTS {table} ({cols});'
+  view_template:        'DROP VIEW IF EXISTS {view};
+                         CREATE VIEW {view} AS
+                         SELECT {cols}
+                         FROM {table}
+                         WHERE _topic = {topic};'
+  table_name_template:  '{type}',
+  view_name_template:   '{topic}',
+  types:                {}
+  defaulttype:          null
+  arraytype_template:   '{type}[]'
+  maxlen_entity:        0
+  maxlen_column:        0
+  invalid_char_regex:   null
+  invalid_char_repl:    '__'
 ```
 
-To create tables for nested array message type fields:
 
-    --write path/to/my.sql nesting=array
+Notes on ROS1 vs ROS2
+---------------------
 
-To create tables for all nested message types:
+In ROS1, message type packages do not need to be installed locally to be able to
+read messages from bags or live topics, as bags and topic publishers provide
+message type definition texts, and message classes can be generated at run-time
+from the type definition text. This is what rosbag does automatically,
+and so does grepros.
 
-    --write path/to/my.sql nesting=all
+Additionally, each ROS1 message type has a hash code computed from its type
+definition text, available both in live topic metadata, and bag metadata.
+The message type definition hash code allows to recognize changes
+in message type packages and use the correct version of the message type.
+
+ROS2 does not provide message type definitions, neither in bagfiles nor in live
+topics. Due to this, the message type packages always need to be installed.
+Also, ROS2 does not provide options for generating type classes at run-time,
+and it does not have the concept of a message type hash.
+
+These are serious limitations in ROS2 compared to ROS1, at least with versions
+up to ROS2 Foxy and ROS2 Galactic, and require extra work to smooth over.
+Without knowing which version of a message type package a bag was recorded with,
+reading bag messages with changed definitions can result in undefined behaviour.
+
+If the serialized message structure happens to match (e.g. a change swapped 
+the order of two `int32` fields), messages will probably be deserialized
+seemingly successfully but with invalid content. If the serialized structure
+does not match, the result is a run-time error.
+
+Because of this, it is prudent to always include a snapshot archive of used
+message type packages, when recording ROS2 bags.
+
+grepros does provide the message type hash itself in ROS2 exports, by calculating
+the ROS2 message type hash on its own from the locally installed type definition.
 
 
 
@@ -865,6 +970,10 @@ optional arguments:
                                                    else for any nested types
                                                    (array fields in parent will be populated 
                                                     with foreign keys instead of messages as JSON)
+                          overwrite=true|false     overwrite existing file in bag/CSV/HTML/SQLite output
+                                                   instead of appending to if bag or database
+                                                   or appending unique counter to file name
+                                                   (default false)
                           template=/my/path.tpl    custom template to use for HTML output
   --plugin PLUGIN [PLUGIN ...]
                         load a Python module or class as plugin
@@ -988,11 +1097,11 @@ Bag input control:
                         order bag messages by topic or type first and then by time
   --reindex-if-unindexed
                         reindex unindexed bags (ROS1 only; makes backup copies)
+  --decompress          decompress archived bags with recognized extensions (.zst .zstd)
 
 Live topic control:
   --publish-prefix PREFIX
                         prefix to prepend to input topic name on publishing match
-                        (default "/grepros")
   --publish-suffix SUFFIX
                         suffix to append to input topic name on publishing match
   --publish-fixname TOPIC
@@ -1004,6 +1113,36 @@ Live topic control:
   --ros-time-in         use ROS time instead of system time for incoming message
                         timestamps from subsribed live ROS topics
 ```
+
+
+Dependencies
+------------
+
+Requires the following 3rd-party Python packages:
+
+- ROS1: rospy, roslib, rosbag, genpy
+- ROS2: rclpy, rosidl_parser, rosidl_runtime_py, builtin_interfaces
+
+Optional, for decompressing archived bags:
+
+- zstandard (https://pypi.org/project/zstandard/)
+
+Optional, for faster reading of ROS1 bags:
+
+- embag (https://github.com/embarktrucks/embag)
+
+Optional, for Postgres output:
+
+- psycopg2 (https://pypi.org/project/psycopg2)
+
+Optional, for Parquet output:
+
+- pandas (https://pypi.org/project/pandas)
+- pyarrow (https://pypi.org/project/pyarrow)
+
+Optional, for generating API documentation:
+
+- doxypypy (https://pypi.org/project/doxypypy)
 
 
 Attribution
