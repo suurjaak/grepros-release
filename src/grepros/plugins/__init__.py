@@ -27,15 +27,14 @@ Released under the BSD License.
 
 @author      Erki Suurjaak
 @created     18.12.2021
-@modified    21.12.2021
+@modified    04.02.2022
 ------------------------------------------------------------------------------
 """
 ## @namespace grepros.plugins
 import glob
-import importlib
 import os
 
-from .. common import ConsolePrinter
+from .. common import ConsolePrinter, import_item
 from .. outputs import MultiSink
 from . import auto
 
@@ -55,9 +54,10 @@ def init(args=None):
     @param   args.PLUGINS   list of Python modules or classes to import,
                             as ["my.module", "other.module.SomeClass", ]
     """
-    for f in sorted(glob.glob(os.path.join(os.path.dirname(__file__), "auto", "*.py"))):
+    for f in sorted(glob.glob(os.path.join(os.path.dirname(__file__), "auto", "*"))):
+        if not f.lower().endswith((".py", ".pyc")): continue  # for f
         name = os.path.splitext(os.path.split(f)[-1])[0]
-        if name.startswith("__"): continue # for f
+        if name.startswith("__") or name in PLUGINS: continue # for f
 
         modulename = "%s.auto.%s" % (__package__, name)
         try:
@@ -134,7 +134,7 @@ def get_argument(name, group=None):
     """
     Returns a command-line argument dictionary, or None if not found.
 
-    @param   name   argument name like "--write-format"
+    @param   name   argument name like "--write"
     @param   group  argument group like "Output control", if any
     """
     from .. import main  # Late import to avoid circular
@@ -148,7 +148,8 @@ def get_argument(name, group=None):
 def populate_known_plugins():
     """Adds known non-auto plugins to `--plugin` argument help."""
     plugins = []
-    for f in sorted(glob.glob(os.path.join(os.path.dirname(__file__), "*.py"))):
+    for f in sorted(glob.glob(os.path.join(os.path.dirname(__file__), "*"))):
+        if not f.lower().endswith((".py", ".pyc")): continue  # for f
         name = os.path.splitext(os.path.split(f)[-1])[0]
         if not name.startswith("__"):
             plugins.append("%s.%s" % (__package__, name))
@@ -205,7 +206,7 @@ def populate_write_formats():
         if len(namelabels[name]) > 1:
             for label in namelabels[name]:
                 texts[name] = texts[name].replace("%s output" % label, PLACEHOLDER)
-            labels = "/".join(sorted(filter(bool, namelabels[name])))
+            labels = "/".join(sorted(filter(bool, namelabels[name]), key=lambda x: x.lower()))
             texts[name] = texts[name].replace(PLACEHOLDER, labels + " output")
 
     fmt = lambda n, h: "\n".join((indent if i or "\n" == inters[n] else "") + l
@@ -213,23 +214,3 @@ def populate_write_formats():
     text = "\n".join(sorted("".join((LEADING, n, inters[n], fmt(n, h)))
                             for n, h in texts.items()))
     writearg["help"] += "\n" + text
-
-
-def import_item(name):
-    """
-    Returns imported module, or identifier from imported namespace; raises on error.
-
-    @param   name  Python module name like "my.module"
-                   or module namespace identifier like "my.module.Class"
-    """
-    result, parts = None, name.split(".")
-    for i, item in enumerate(parts):
-        path, success = ".".join(parts[:i + 1]), False
-        try: result, success = importlib.import_module(path), True
-        except ImportError: pass
-        if not success and i:
-            try: result, success = getattr(result, item), True
-            except AttributeError: pass
-        if not success:
-            raise ImportError("No module or identifier named %r" % path)
-    return result
