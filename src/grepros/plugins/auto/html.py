@@ -8,7 +8,7 @@ Released under the BSD License.
 
 @author      Erki Suurjaak
 @created     03.12.2021
-@modified    23.12.2021
+@modified    15.03.2022
 ------------------------------------------------------------------------------
 """
 ## @namespace grepros.plugins.auto.html
@@ -41,16 +41,18 @@ class HtmlSink(SinkBase, TextSinkMixin):
 
     def __init__(self, args):
         """
-        @param   args                 arguments object like argparse.Namespace
-        @param   args.META            whether to print metainfo
-        @param   args.DUMP_TARGET     name of HTML file to write,
-                                      will add counter like .2 to filename if exists
-        @param   args.DUMP_OPTIONS    {"template": path to custom HTML template, if any}
-        @param   args.VERBOSE         whether to print debug information
-        @param   args.MATCH_WRAPPER   string to wrap around matched values,
-                                      both sides if one value, start and end if more than one,
-                                      or no wrapping if zero values
-        @param   args.ORDERBY         "topic" or "type" if any to group results by
+        @param   args                  arguments object like argparse.Namespace
+        @param   args.META             whether to print metainfo
+        @param   args.WRITE            name of HTML file to write,
+                                       will add counter like .2 to filename if exists
+        @param   args.WRITE_OPTIONS    {"template": path to custom HTML template, if any,
+                                        "overwrite": whether to overwrite existing file
+                                                     (default false)}
+        @param   args.VERBOSE          whether to print debug information
+        @param   args.MATCH_WRAPPER    string to wrap around matched values,
+                                       both sides if one value, start and end if more than one,
+                                       or no wrapping if zero values
+        @param   args.ORDERBY          "topic" or "type" if any to group results by
         """
         args = copy.deepcopy(args)
         args.WRAP_WIDTH = self.WRAP_WIDTH
@@ -58,10 +60,11 @@ class HtmlSink(SinkBase, TextSinkMixin):
 
         super(HtmlSink, self).__init__(args)
         TextSinkMixin.__init__(self, args)
-        self._queue    = queue.Queue()
-        self._writer   = None              # threading.Thread running _stream()
-        self._filename = args.DUMP_TARGET  # Filename base, will be made unique
-        self._template_path = args.DUMP_OPTIONS.get("template") or self.TEMPLATE_PATH
+        self._queue     = queue.Queue()
+        self._writer    = None        # threading.Thread running _stream()
+        self._filename  = args.WRITE  # Filename base, will be made unique
+        self._overwrite = (args.WRITE_OPTIONS.get("overwrite") == "true")
+        self._template_path = args.WRITE_OPTIONS.get("template") or self.TEMPLATE_PATH
         self._close_printed = False
 
         WRAPS = ((args.MATCH_WRAPPER or [""]) * 2)[:2]
@@ -85,12 +88,17 @@ class HtmlSink(SinkBase, TextSinkMixin):
 
     def validate(self):
         """
-        Returns whether custom template exists and ROS environment is set, prints error if not.
+        Returns whether write options are valid and ROS environment is set, prints error if not.
         """
         result = True
-        if self._args.DUMP_OPTIONS.get("template") and not os.path.isfile(self._template_path):
+        if self.args.WRITE_OPTIONS.get("template") and not os.path.isfile(self._template_path):
             result = False
             ConsolePrinter.error("Template does not exist: %s.", self._template_path)
+        if self.args.WRITE_OPTIONS.get("overwrite") not in (None, "true", "false"):
+            ConsolePrinter.error("Invalid overwrite option for HTML: %r. "
+                                 "Choose one of {true, false}.",
+                                 self.args.WRITE_OPTIONS["overwrite"])
+            result = False
         return rosapi.validate() and result
 
     def close(self):
@@ -131,11 +139,14 @@ class HtmlSink(SinkBase, TextSinkMixin):
             with open(self._template_path, "r") as f: tpl = f.read()
             template = step.Template(tpl, escape=True, strip=False)
             ns = dict(source=self.source, sink=self, args=["grepros"] + sys.argv[1:],
-                      timeline=not self._args.ORDERBY, messages=self._produce())
-            makedirs(os.path.dirname(self._filename))
-            self._filename = unique_path(self._filename, empty_ok=True)
-            if self._args.VERBOSE:
-                ConsolePrinter.debug("Creating %s.", self._filename)
+                      timeline=not self.args.ORDERBY, messages=self._produce())
+            makedirs(os.path.dirname(self.args.WRITE))
+            if not self._overwrite:
+                self._filename = unique_path(self.args.WRITE, empty_ok=True)
+            if self.args.VERBOSE:
+                sz = os.path.isfile(self._filename) and os.path.getsize(self._filename)
+                action = "Overwriting" if sz and self._overwrite else "Creating"
+                ConsolePrinter.debug("%s %s.", action, self._filename)
             with open(self._filename, "wb") as f:
                 template.stream(f, ns, unbuffered=True)
         except Exception as e:
@@ -151,10 +162,9 @@ class HtmlSink(SinkBase, TextSinkMixin):
                 self._queue.task_done()
                 break  # while
             (topic, index, stamp, msg, match) = entry
-            topickey = (topic, rosapi.get_message_type(msg),
-                        self.source.get_message_type_hash(msg))
-            if self._args.VERBOSE and topickey not in self._counts:
-                ConsolePrinter.debug("Adding topic %s.", topic)
+            topickey = rosapi.TypeMeta.make(msg, topic).topickey
+            if self.args.VERBOSE and topickey not in self._counts:
+                ConsolePrinter.debug("Adding topic %s in HTML output.", topic)
             yield entry
             super(HtmlSink, self).emit(topic, index, stamp, msg, match)
             self._queue.task_done()
@@ -168,5 +178,7 @@ def init(*_, **__):
     """Adds HTML output format support."""
     from ... import plugins  # Late import to avoid circular
     plugins.add_write_format("html", HtmlSink, "HTML", [
-        ("template=/my/path.tpl",  "custom template to use for HTML output")
+        ("template=/my/path.tpl",  "custom template to use for HTML output"),
+        ("overwrite=true|false",   "overwrite existing file in HTML output\n"
+                                   "instead of appending unique counter (default false)")
     ])
