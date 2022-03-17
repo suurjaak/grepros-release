@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-## @namespace grepros.rosapi
 """
 ROS interface, shared facade for ROS1 and ROS2.
 
@@ -9,9 +8,10 @@ Released under the BSD License.
 
 @author      Erki Suurjaak
 @created     01.11.2021
-@modified    26.12.2021
+@modified    12.03.2022
 ------------------------------------------------------------------------------
 """
+## @namespace grepros.rosapi
 import collections
 import datetime
 import decimal
@@ -52,8 +52,143 @@ ROS_TIME_CLASSES = {}
 ## All built-in basic types plus time types in ROS, populated after init
 ROS_COMMON_TYPES = []
 
+## Mapping between type aliases and real types, like {"byte": "int8"} in ROS1
+ROS_ALIAS_TYPES = {}
+
 ## Module grepros.ros1 or grepros.ros2
 realapi = None
+
+
+class TypeMeta(object):
+    """
+    Container for caching and retrieving message type metadata.
+
+    All property values are lazy-loaded upon request.
+    """
+
+    ## SourceBase instance
+    SOURCE = None
+
+    ## Seconds before auto-clearing message from cache
+    LIFETIME = 2
+
+    ## {id(msg): MessageMeta()}
+    _CACHE = {}
+
+    ## {id(msg): [id(nested msg), ]}
+    _CHILDREN = {}
+
+    ## {id(msg): time.time() of registering}
+    _TIMINGS = {}
+
+    ## time.time() of last cleaning of stale messages
+    _LASTSWEEP = time.time()
+
+    def __init__(self, msg, topic=None):
+        self._msg      = msg
+        self._topic    = topic
+        self._type     = None  # Message typename as "pkg/MsgType"
+        self._def      = None  # Message type definition with full subtype definitions
+        self._hash     = None  # Message type definition MD5 hash
+        self._cls      = None  # Message class object
+        self._topickey = None  # (topic, typename, typehash)
+        self._typekey  = None  # (typename, typehash)
+
+    def __enter__(self, *_, **__):
+        """Allows using instance as a context manager (no other effect)."""
+        return self
+
+    def __exit__(self, *_, **__): pass
+
+    @property
+    def typename(self):
+        """Returns message typename, as "pkg/MsgType"."""
+        if not self._type:
+            self._type = realapi.get_message_type(self._msg)
+        return self._type
+
+    @property
+    def typehash(self):
+        """Returns message type definition MD5 hash."""
+        if not self._hash:
+            hash = self.SOURCE and self.SOURCE.get_message_type_hash(self._msg)
+            self._hash = hash or realapi.get_message_type_hash(self._msg)
+        return self._hash
+
+    @property
+    def definition(self):
+        """Returns message type definition text with full subtype definitions."""
+        if not self._def:
+            typedef = self.SOURCE and self.SOURCE.get_message_definition(self._msg)
+            self._def = typedef or realapi.get_message_definition(self._msg)
+        return self._def
+
+    @property
+    def typeclass(self):
+        """Returns message class object."""
+        if not self._cls:
+            cls = self.SOURCE and self.SOURCE.get_message_class(self.typename, self.typehash)
+            self._cls = cls or realapi.get_message_class(self.typename)
+        return self._cls
+
+    @property
+    def topickey(self):
+        """Returns (topic, typename, typehash) for message."""
+        if not self._topickey:
+            self._topickey = (self._topic, self.typename, self.typehash)
+        return self._topickey
+
+    @property
+    def typekey(self):
+        """Returns (typename, typehash) for message."""
+        if not self._typekey:
+            self._typekey = (self.typename, self.typehash)
+        return self._typekey
+
+    @classmethod
+    def make(cls, msg, topic=None, root=None):
+        """
+        Returns TypeMeta instance, registering message in cache if not present.
+
+        @param   topic  topic the message is in if root message
+        @param   root   root message that msg is a nested value of, if any
+        """
+        msgid = id(msg)
+        if msgid not in cls._CACHE:
+            cls._CACHE[msgid] = TypeMeta(msg, topic)
+            if root and root is not msg:
+                cls._CHILDREN.setdefault(id(root), set()).add(msgid)
+            cls._TIMINGS[msgid] = time.time()
+        cls.sweep()
+        return cls._CACHE[msgid]
+
+    @classmethod
+    def discard(cls, msg):
+        """Discards message metadata from cache, if any, including nested messages."""
+        cls._CACHE.pop(id(msg), None)
+        for childid in cls._CHILDREN.pop(id(msg), []):
+            cls._CACHE.pop(childid, None)
+        cls.sweep()
+
+    @classmethod
+    def sweep(cls):
+        """Discards stale messages from cache."""
+        now = time.time()
+        if not cls.LIFETIME or cls._LASTSWEEP < now - cls.LIFETIME: return
+
+        for msgid, tm in list(cls._TIMINGS.items()):
+            drop = (tm > now) or (tm < now - cls.LIFETIME)
+            drop and cls._CACHE.pop(msgid, None)
+            for childid in cls._CHILDREN.pop(msgid, []) if drop else ():
+                cls._CACHE.pop(childid, None)
+        cls._LASTSWEEP = now
+
+    @classmethod
+    def clear(cls):
+        """Clears entire cache."""
+        cls._CACHE.clear()
+        cls._CHILDREN.clear()
+        cls._TIMINGS.clear()
 
 
 def init_node(name=None):
@@ -77,7 +212,7 @@ def validate(live=False):
     @param   live  whether environment must support launching a ROS node
     """
     global realapi, BAG_EXTENSIONS, SKIP_EXTENSIONS, \
-           ROS_COMMON_TYPES, ROS_TIME_TYPES, ROS_TIME_CLASSES
+           ROS_COMMON_TYPES, ROS_TIME_TYPES, ROS_TIME_CLASSES, ROS_ALIAS_TYPES
     if realapi:
         return True
 
@@ -99,6 +234,7 @@ def validate(live=False):
         ROS_COMMON_TYPES = ROS_BUILTIN_TYPES + realapi.ROS_TIME_TYPES
         ROS_TIME_TYPES   = realapi.ROS_TIME_TYPES
         ROS_TIME_CLASSES = realapi.ROS_TIME_CLASSES
+        ROS_ALIAS_TYPES = realapi.ROS_ALIAS_TYPES
     return success
 
 
@@ -110,7 +246,7 @@ def calculate_definition_hash(typename, msgdef, extradefs=()):
     @param   extradefs  additional subtype definitions as ((typename, msgdef), )
     """
     # "type name (= constvalue)?" or "type name (defaultvalue)?" (ROS2 format)
-    FIELD_RGX = re.compile(r"^([a-z][^\s]+)\s+([^\s=]+)(\s*=\s*([^\n]+))?(\s+([^\n]+))?", re.I)
+    FIELD_RGX = re.compile(r"^([a-z][^\s:]+)\s+([^\s=]+)(\s*=\s*([^\n]+))?(\s+([^\n]+))?", re.I)
     STR_CONST_RGX = re.compile(r"^w?string\s+([^\s=#]+)\s*=")
     lines, pkg = [], typename.rsplit("/", 1)[0]
     subtypedefs = dict(extradefs, **parse_definition_subtypes(msgdef))
@@ -144,7 +280,7 @@ def calculate_definition_hash(typename, msgdef, extradefs=()):
     return hashlib.md5("\n".join(lines).encode()).hexdigest()
 
 
-def create_bag_reader(filename, reindex=False, reindex_progress=False):
+def create_bag_reader(filename, decompress=False, reindex=False, progress=False):
     """
     Returns an object for reading ROS bags.
 
@@ -154,10 +290,12 @@ def create_bag_reader(filename, reindex=False, reindex_progress=False):
     Supplemented with get_message_class(), get_message_definition(),
     get_message_type_hash(), and get_topic_info().
 
-    @param   reindex           reindex unindexed bag (ROS1 only), making a backup if indexed format
-    @param   reindex_progress  show progress bar with reindexing status
+    @param   decompress   decompress archived bag to file directory
+    @param   reindex      reindex unindexed bag (ROS1 only), making a backup if indexed format
+    @param   progress     show progress bar with decompression or reindexing status
     """
-    return realapi.create_bag_reader(filename, reindex, reindex_progress)
+    return realapi.create_bag_reader(filename, decompress=decompress,
+                                     reindex=reindex, progress=progress)
 
 
 def create_bag_writer(filename):
@@ -176,7 +314,12 @@ def create_publisher(topic, cls_or_typename, queue_size):
 
 
 def create_subscriber(topic, cls_or_typename, handler, queue_size):
-    """Returns a ROS subscriber instance, with .unregister() and .get_qos()."""
+    """
+    Returns a ROS subscriber instance.
+    
+    Supplemented with .unregister(), .get_message_class(), .get_message_definition(),
+    .get_message_type_hash(), and .get_qoses().
+    """
     return realapi.create_subscriber(topic, cls_or_typename, handler, queue_size)
 
 
@@ -215,9 +358,9 @@ def get_message_fields(val):
     return realapi.get_message_fields(val)
 
 
-def get_message_type(msg):
+def get_message_type(msg_or_cls):
     """Returns ROS message type name, like "std_msgs/Header"."""
-    return realapi.get_message_type(msg)
+    return realapi.get_message_type(msg_or_cls)
 
 
 def get_message_value(msg, name, typename):
@@ -244,6 +387,24 @@ def get_topic_types():
     Omits topics that the current ROS node itself has published.
     """
     return realapi.get_topic_types()
+
+
+def get_type_alias(typename):
+    """
+    Returns alias like "char" for ROS built-in type, if any; reverse of get_type_alias().
+
+    In ROS1, byte and char are aliases for int8 and uint8; in ROS2 the reverse.
+    """
+    return next((k for k, v in ROS_ALIAS_TYPES.items() if v == typename), None)
+
+
+def get_alias_type(typename):
+    """
+    Returns ROS built-in type for alias like "char", if any; reverse of get_alias_type().
+
+    In ROS1, byte and char are aliases for int8 and uint8; in ROS2 the reverse.
+    """
+    return ROS_ALIAS_TYPES.get(typename)
 
 
 def is_ros_message(val, ignore_time=False):
@@ -369,7 +530,7 @@ def message_to_dict(msg, replace=None):
     for name, typename in realapi.get_message_fields(msg).items():
         v = realapi.get_message_value(msg, name, typename)
         if realapi.is_ros_time(v):
-            v = dict(zip(["secs", "nsecs"], divmod(realapi.to_nsec(v), 10**9)))
+            v = dict(zip(["secs", "nsecs"], realapi.to_sec_nsec(v)))
         elif realapi.is_ros_message(v):
             v = message_to_dict(v)
         elif isinstance(v, (list, tuple)):
@@ -426,7 +587,8 @@ def scalar(typename):
     """
     Returns scalar type from ROS message data type, like "uint8" from uint8-array.
 
-    Returns type unchanged if an ordinary type.
+    Returns type unchanged if an ordinary type. In ROS2, returns unbounded type,
+    e.g. "string" from "string<=10[<=5]".
     """
     return realapi.scalar(typename)
 
@@ -444,8 +606,8 @@ def to_datetime(val):
 
 def to_decimal(val):
     """Returns value as decimal.Decimal if value is ROS time/duration, else value."""
-    if is_ros_time(val):
-        return decimal.Decimal("%d.%09d" % (divmod(to_nsec(val), 10**9)))
+    if realapi.is_ros_time(val):
+        return decimal.Decimal("%d.%09d" % realapi.to_sec_nsec(val))
     return val
 
 
@@ -457,3 +619,8 @@ def to_nsec(val):
 def to_sec(val):
     """Returns value in seconds if value is ROS time/duration, else value."""
     return realapi.to_sec(val)
+
+
+def to_sec_nsec(val):
+    """Returns value as (seconds, nanoseconds) if value is ROS time/duration, else value."""
+    return realapi.to_sec_nsec(val)
