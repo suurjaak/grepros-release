@@ -1,3 +1,26 @@
+## grepros (noetic) - 0.4.7-1
+
+The packages in the `grepros` repository were released into the `noetic` distro by running `/usr/local/bin/bloom-release grepros --rosdistro noetic` on `Sat, 25 Jun 2022 17:58:00 -0000`
+
+The `grepros` package was released.
+
+Version of package(s) in repository `grepros`:
+
+- upstream repository: https://github.com/suurjaak/grepros.git
+- release repository: https://github.com/suurjaak/grepros-release.git
+- rosdistro version: `0.4.6-1`
+- old version: `0.4.6-1`
+- new version: `0.4.7-1`
+
+Versions of tools used:
+
+- bloom version: `0.11.1`
+- catkin_pkg version: `0.4.24`
+- rosdep version: `0.21.0`
+- rosdistro version: `0.8.3`
+- vcstools version: `0.1.42`
+
+
 ## grepros (foxy) - 0.4.6-1
 
 The packages in the `grepros` repository were released into the `foxy` distro by running `/usr/bin/bloom-release grepros --rosdistro foxy` on `Sun, 29 May 2022 14:02:42 -0000`
