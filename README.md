@@ -821,7 +821,7 @@ Specifying write `format=mcap` is not required if the filename ends with `.mcap`
     --plugin grepros.plugins.parquet \
     --write path/to/my.parquet [format=parquet] [overwrite=true|false] \
             [column-name=rostype:value] [type-rostype=arrowtype] \
-            [writer-argname=argvalue]
+            [idgenerator=callable] [nesting=array|all] [writer-argname=argvalue]
 
 Write messages to Apache Parquet files (columnar storage format, version 2.6),
 each message type to a separate file, named `path/to/package__MessageType__typehash/my.parquet`
@@ -834,6 +834,14 @@ e.g. `package__MessageType__typehash/my.2.parquet`, unless specified to overwrit
 Specifying `format=parquet` is not required if the filename ends with `.parquet`.
 
 Requires [pandas](https://pypi.org/project/pandas) and [pyarrow](https://pypi.org/project/pyarrow).
+
+By default, message IDs are only added when populating nested message types,
+as field `_id string()` with UUID content. To explicitly add ID columns:
+
+    --write path/to/my.parquet idgenerator="itertools.count()"
+
+Column type is auto-detected from produced ID values: `int64`/`float64` for numerics,
+`string` for anything else (non-numerics cast to string).
 
 Supports adding supplementary columns with fixed values to Parquet files:
 
@@ -859,6 +867,72 @@ For example, specifying no compression:
     --write path/to/my.parquet writer-compression=null
 
 The value is interpreted as JSON if possible, e.g. `writer-use_dictionary=false`.
+
+To recursively populate nested array fields:
+
+    --write path/to/my.parquet nesting=array
+
+E.g. for `diagnostic_msgs/DiagnosticArray`, this would populate files with following schemas:
+
+```python
+diagnostic_msgs__DiagnosticArray = pyarrow.schema([
+  ("header.seq",          pyarrow.int64()),
+  ("header.stamp.secs",   pyarrow.int32()),
+  ("header.stamp.nsecs",  pyarrow.int32()),
+  ("header.frame_id",     pyarrow.string()),
+  ("status",              pyarrow.string()),   # [_id from "diagnostic_msgs/DiagnosticStatus", ]
+  ("_topic",              pyarrow.string()),
+  ("_timestamp",          pyarrow.int64()),
+  ("_id",                 pyarrow.string()),
+  ("_parent_type",        pyarrow.string()),
+  ("_parent_id",          pyarrow.string()),
+])
+
+diagnostic_msgs__DiagnosticStatus = pyarrow.schema([
+  ("level",               pyarrow.int16()),
+  ("name",                pyarrow.string()),
+  ("message",             pyarrow.string()),
+  ("hardware_id",         pyarrow.string()),
+  ("values"",             pyarrow.string()),   # [_id from "diagnostic_msgs/KeyValue", ]
+  ("_topic",              pyarrow.string()),   # _topic from "diagnostic_msgs/DiagnosticArray"
+  ("_timestamp",          pyarrow.int64()),    # _timestamp from "diagnostic_msgs/DiagnosticArray"
+  ("_id",                 pyarrow.string()),
+  ("_parent_type",        pyarrow.string()),   # "diagnostic_msgs/DiagnosticArray"
+  ("_parent_id",          pyarrow.string()),   # _id from "diagnostic_msgs/DiagnosticArray"
+])
+
+diagnostic_msgs__KeyValue = pyarrow.schema([
+  ("key"                  pyarrow.string()),
+  ("value",               pyarrow.string()),
+  ("_topic",              pyarrow.string()),   # _topic from "diagnostic_msgs/DiagnosticStatus"
+  ("_timestamp",          pyarrow.int64()),    # _timestamp from "diagnostic_msgs/DiagnosticStatus"
+  ("_id",                 pyarrow.string()),
+  ("_parent_type",        pyarrow.string()),   # "diagnostic_msgs/DiagnosticStatus"
+  ("_parent_id",          pyarrow.string()),   # _id from "diagnostic_msgs/DiagnosticStatus"
+])
+```
+
+Without nesting, array field values are inserted as JSON with full subtype content.
+
+To recursively populate all nested message types:
+
+    --write path/to/my.parquet nesting=all
+
+E.g. for `diagnostic_msgs/DiagnosticArray`, this would, in addition to the above, populate:
+
+```python
+std_msgs__Header = pyarrow.schema([
+  "seq",                  pyarrow.int64()),
+  "stamp.secs",           pyarrow.int32()),
+  "stamp.nsecs",          pyarrow.int32()),
+  "frame_id",             pyarrow.string()),
+  "_topic",               pyarrow.string()),   # _topic from "diagnostic_msgs/DiagnosticArray"
+  "_timestamp",           pyarrow.int64()),    # _timestamp from "diagnostic_msgs/DiagnosticArray"
+  "_id",                  pyarrow.string()),
+  "_parent_type",         pyarrow.string()),   # "diagnostic_msgs/DiagnosticArray"
+  "_parent_id",           pyarrow.string()),   # _id from "diagnostic_msgs/DiagnosticArray"
+])
+```
 
 
 ### sql
@@ -1013,10 +1087,13 @@ optional arguments:
                                                    load additional SQL dialect options
                                                    for Postgres/SQLite output
                                                    from a YAML or JSON file
+                          idgenerator=callable     callable or iterable for producing message IDs
+                                                   in Parquet output, like 'uuid.uuid4' or 'itertools.count()';
+                                                   by default only nesting uses IDs
                           message-yaml=true|false  whether to populate table field messages.yaml
                                                    in SQLite output (default true)
                           nesting=array|all        create tables for nested message types
-                                                   in Postgres/SQLite output,
+                                                   in Parquet/Postgres/SQLite output,
                                                    only for arrays if "array" 
                                                    else for any nested types
                                                    (array fields in parent will be populated 
