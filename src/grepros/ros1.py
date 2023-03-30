@@ -8,7 +8,7 @@ Released under the BSD License.
 
 @author      Erki Suurjaak
 @created     01.11.2021
-@modified    27.10.2022
+@modified    27.03.2023
 ------------------------------------------------------------------------------
 """
 ## @namespace grepros.ros1
@@ -341,6 +341,19 @@ def validate(live=False):
     return not missing
 
 
+def canonical(typename, unbounded=False):
+    """
+    Returns "pkg/Type" for "pkg/subdir/Type".
+
+    @param  unbounded  drop array bounds, e.g. returning "uint8[]" for "uint8[10]"
+    """
+    if typename and typename.count("/") > 1:
+        typename = "%s/%s" % tuple((x[0], x[-1]) for x in [typename.split("/")])[0]
+    if unbounded and typename and "[" in typename:
+        typename = typename[:typename.index("[")] + "[]"
+    return typename
+
+
 def create_publisher(topic, cls_or_typename, queue_size):
     """Returns a rospy.Publisher."""
     def pub_unregister():
@@ -433,10 +446,10 @@ def get_message_type_hash(msg_or_type):
 
 def get_message_fields(val):
     """Returns OrderedDict({field name: field type name}) if ROS1 message, else {}."""
-    names = getattr(val, "__slots__", [])
-    if isinstance(val, tuple(ROS_TIME_CLASSES)):  # Empty __slots__
-        names = genpy.TVal.__slots__
-    return collections.OrderedDict(zip(names, getattr(val, "_slot_types", [])))
+    names, types = (getattr(val, k, []) for k in ("__slots__", "_slot_types"))
+    # Bug in genpy: class slot types defined as "int32", but everywhere else types use "uint32"
+    if isinstance(val, genpy.TVal): types = ["uint32", "uint32"]
+    return collections.OrderedDict(zip(names, types))
 
 
 def get_message_type(msg_or_cls):
@@ -501,7 +514,7 @@ def scalar(typename):
 
     Returns type unchanged if already a scalar.
     """
-    return typename[:typename.index("[")] if "[" in typename else typename
+    return typename[:typename.index("[")] if typename and "[" in typename else typename
 
 
 def set_message_value(obj, name, value):
